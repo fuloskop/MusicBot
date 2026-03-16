@@ -1,5 +1,5 @@
 app = "musicbot-rfsieg"
-primary_region = "ams"
+primary_region = "fra"
 
 [build]
 
@@ -9,3 +9,5 @@ primary_region = "ams"
 [[vm]]
   size = "shared-cpu-1x"
   memory = "256mb"
+  auto_stop_machines = false
+  auto_start_machines = false
