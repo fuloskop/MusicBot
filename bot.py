@@ -236,8 +236,17 @@ async def on_message(message: discord.Message):
             channel=message.channel.name,
             author=str(message.author),
             matched=matched,
-            content=message.content,
+            content=full_content,
         )
+
+        # Embed verilerini ayri olarak topla
+        embeds_data = []
+        for embed in message.embeds:
+            embeds_data.append({
+                "title": embed.title,
+                "description": embed.description,
+                "fields": [{"name": f.name, "value": f.value} for f in embed.fields],
+            })
 
         # Eslesen mesaji endpoint'e gonder
         payload = {
@@ -249,6 +258,8 @@ async def on_message(message: discord.Message):
             "author_name": str(message.author),
             "message_id": message.id,
             "content": message.content,
+            "full_content": full_content,
+            "embeds": embeds_data,
             "keyword": watcher["keyword"],
             "matched_keywords": matched,
             "timestamp": message.created_at.isoformat(),
