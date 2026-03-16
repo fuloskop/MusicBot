@@ -133,7 +133,11 @@ async def on_message(message: discord.Message):
     for watcher in guild_watchers:
         if watcher["channel_id"] != message.channel.id:
             continue
-        if watcher["keyword"].lower() not in content_lower:
+
+        # Virgülle ayrılmış kelimelerden herhangi biri geçiyorsa eşleş
+        keywords = [k.strip().lower() for k in watcher["keyword"].split(",")]
+        matched = [k for k in keywords if k and k in content_lower]
+        if not matched:
             continue
 
         # Eslesen mesaji endpoint'e gonder
@@ -147,6 +151,7 @@ async def on_message(message: discord.Message):
             "message_id": message.id,
             "content": message.content,
             "keyword": watcher["keyword"],
+            "matched_keywords": matched,
             "timestamp": message.created_at.isoformat(),
         }
 
@@ -193,7 +198,9 @@ async def help_command(ctx: commands.Context):
         value=(
             "`!takip <#kanal> <kelime> <endpoint>` — Kanaldaki kelimeyi takip et\n"
             "`!takipler` — Aktif takipleri listele (alias: `!watchlist`)\n"
-            "`!takipkaldir <id>` — Takibi kaldir (alias: `!unwatch`)"
+            "`!takipkaldir <id>` — Takibi kaldir (alias: `!unwatch`)\n\n"
+            "**Coklu kelime:** Virgul ile ayir, herhangi biri gecerse tetiklenir\n"
+            '**Tam ifade:** Tirnak icinde yaz, tum ifade aranir'
         ),
         inline=False,
     )
@@ -214,6 +221,8 @@ async def help_command(ctx: commands.Context):
             "!cal https://youtube.com/watch?v=...\n"
             "!cal never gonna give you up\n"
             "!takip #genel indirim https://api.example.com/hook\n"
+            '!takip #genel indirim,kampanya,firsat https://api.example.com/hook\n'
+            '!takip #genel "buyuk indirim" https://api.example.com/hook\n'
             "```"
         ),
         inline=False,
