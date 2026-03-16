@@ -206,15 +206,15 @@ async def on_message(message: discord.Message):
     if not full_content.strip():
         return
 
-    content_lower = normalize_turkish(full_content)
+    content_check = full_content
 
     for watcher in guild_watchers:
         if watcher["channel_id"] != message.channel.id:
             continue
 
         # Virgülle ayrılmış kelimelerden herhangi biri geçiyorsa eşleş
-        keywords = [normalize_turkish(k.strip()) for k in watcher["keyword"].split(",")]
-        matched = [k for k in keywords if k and k in content_lower]
+        keywords = [k.strip() for k in watcher["keyword"].split(",")]
+        matched = [k for k in keywords if k and k in content_check]
         if not matched:
             continue
 
