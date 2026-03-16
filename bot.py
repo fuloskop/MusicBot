@@ -1,0 +1,330 @@
+import asyncio
+import json
+import discord
+from discord.ext import commands
+from collections import deque
+from dotenv import load_dotenv
+import os
+import yt_dlp
+import aiohttp
+
+load_dotenv()
+
+intents = discord.Intents.default()
+intents.message_content = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# Her sunucu (guild) için ayrı kuyruk
+queues: dict[int, deque] = {}
+now_playing: dict[int, str] = {}
+
+# Kanal takip sistemi
+# { guild_id: [ { "id": int, "channel_id": int, "keyword": str, "endpoint": str } ] }
+WATCHERS_FILE = "watchers.json"
+watchers: dict[int, list[dict]] = {}
+watcher_counter = 0
+
+
+def load_watchers():
+    global watchers, watcher_counter
+    if os.path.exists(WATCHERS_FILE):
+        with open(WATCHERS_FILE, "r") as f:
+            data = json.load(f)
+        # JSON key'leri string, int'e cevir
+        watchers = {int(k): v for k, v in data.get("watchers", {}).items()}
+        watcher_counter = data.get("counter", 0)
+
+
+def save_watchers():
+    with open(WATCHERS_FILE, "w") as f:
+        json.dump({"watchers": watchers, "counter": watcher_counter}, f, indent=2)
+
+YDL_OPTIONS = {
+    "format": "bestaudio/best",
+    "noplaylist": False,
+    "quiet": True,
+    "no_warnings": True,
+    "default_search": "ytsearch",
+    "extract_flat": False,
+}
+
+FFMPEG_OPTIONS = {
+    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+    "options": "-vn",
+}
+
+
+def get_queue(guild_id: int) -> deque:
+    if guild_id not in queues:
+        queues[guild_id] = deque()
+    return queues[guild_id]
+
+
+async def extract_info(query: str) -> list[dict]:
+    """Linkten veya arama sorgusundan sarki bilgilerini cikar."""
+    loop = asyncio.get_event_loop()
+
+    def _extract():
+        with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
+            info = ydl.extract_info(query, download=False)
+            if "entries" in info:
+                # Playlist
+                return [
+                    {"title": e.get("title", "Bilinmeyen"), "url": e["url"]}
+                    for e in info["entries"]
+                    if e and e.get("url")
+                ]
+            else:
+                return [{"title": info.get("title", "Bilinmeyen"), "url": info["url"]}]
+
+    return await loop.run_in_executor(None, _extract)
+
+
+async def play_next(ctx: commands.Context):
+    """Kuyruktaki siradaki sarkiyi cal."""
+    guild_id = ctx.guild.id
+    queue = get_queue(guild_id)
+
+    if not queue:
+        now_playing.pop(guild_id, None)
+        await ctx.send("Kuyruk bitti!")
+        return
+
+    song = queue.popleft()
+    now_playing[guild_id] = song["title"]
+
+    source = discord.FFmpegOpusAudio(song["url"], **FFMPEG_OPTIONS)
+
+    def after_playing(error):
+        if error:
+            print(f"Hata: {error}")
+        asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop)
+
+    ctx.voice_client.play(source, after=after_playing)
+    await ctx.send(f"Caliniyor: **{song['title']}**")
+
+
+@bot.event
+async def on_ready():
+    load_watchers()
+    print(f"{bot.user} olarak giris yapildi!")
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    # Bot kendi mesajlarini yoksay
+    if message.author.bot:
+        return
+
+    # Komutlari isle
+    await bot.process_commands(message)
+
+    # Takip kontrolu
+    if not message.guild:
+        return
+
+    guild_watchers = watchers.get(message.guild.id, [])
+    if not guild_watchers:
+        return
+
+    content_lower = message.content.lower()
+
+    for watcher in guild_watchers:
+        if watcher["channel_id"] != message.channel.id:
+            continue
+        if watcher["keyword"].lower() not in content_lower:
+            continue
+
+        # Eslesen mesaji endpoint'e gonder
+        payload = {
+            "guild_id": message.guild.id,
+            "guild_name": message.guild.name,
+            "channel_id": message.channel.id,
+            "channel_name": message.channel.name,
+            "author_id": message.author.id,
+            "author_name": str(message.author),
+            "message_id": message.id,
+            "content": message.content,
+            "keyword": watcher["keyword"],
+            "timestamp": message.created_at.isoformat(),
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    watcher["endpoint"],
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    print(
+                        f"[Takip #{watcher['id']}] Mesaj gonderildi -> "
+                        f"{watcher['endpoint']} (status: {resp.status})"
+                    )
+        except Exception as e:
+            print(f"[Takip #{watcher['id']}] Hata: {e}")
+
+
+@bot.command(name="gel", help="Botu ses kanalina cagir")
+async def join(ctx: commands.Context):
+    if not ctx.author.voice:
+        return await ctx.send("Once bir ses kanalina gir!")
+    channel = ctx.author.voice.channel
+    if ctx.voice_client:
+        await ctx.voice_client.move_to(channel)
+    else:
+        await channel.connect()
+    await ctx.send(f"**{channel.name}** kanalina katildim!")
+
+
+@bot.command(name="cal", aliases=["p", "play"], help="Sarki cal (link veya arama)")
+async def play(ctx: commands.Context, *, query: str):
+    # Ses kanalina baglan
+    if not ctx.voice_client:
+        if not ctx.author.voice:
+            return await ctx.send("Once bir ses kanalina gir!")
+        await ctx.author.voice.channel.connect()
+
+    await ctx.send(f"Araniyor: **{query}**...")
+
+    try:
+        songs = await extract_info(query)
+    except Exception as e:
+        return await ctx.send(f"Hata olustu: {e}")
+
+    queue = get_queue(ctx.guild.id)
+
+    if len(songs) > 1:
+        for song in songs:
+            queue.append(song)
+        await ctx.send(f"**{len(songs)}** sarki kuyruga eklendi!")
+    else:
+        queue.append(songs[0])
+        await ctx.send(f"Kuyruga eklendi: **{songs[0]['title']}**")
+
+    # Halihazirda bir sey calmiyorsa baslat
+    if not ctx.voice_client.is_playing() and not ctx.voice_client.is_paused():
+        await play_next(ctx)
+
+
+@bot.command(name="liste", aliases=["queue", "q"], help="Kuyruktaki sarkilari goster")
+async def show_queue(ctx: commands.Context):
+    guild_id = ctx.guild.id
+    queue = get_queue(guild_id)
+
+    if guild_id in now_playing:
+        msg = f"Simdi caliniyor: **{now_playing[guild_id]}**\n\n"
+    else:
+        msg = ""
+
+    if not queue:
+        msg += "Kuyruk bos."
+    else:
+        for i, song in enumerate(queue, 1):
+            msg += f"`{i}.` {song['title']}\n"
+            if i >= 20:
+                msg += f"... ve {len(queue) - 20} sarki daha"
+                break
+
+    await ctx.send(msg)
+
+
+@bot.command(name="atla", aliases=["skip", "s"], help="Sarkiyi atla")
+async def skip(ctx: commands.Context):
+    if ctx.voice_client and ctx.voice_client.is_playing():
+        ctx.voice_client.stop()  # after callback play_next'i tetikler
+        await ctx.send("Atlandi!")
+    else:
+        await ctx.send("Su an bir sey calmiyor.")
+
+
+@bot.command(name="duraklat", aliases=["pause"], help="Sarkiyi duraklat")
+async def pause(ctx: commands.Context):
+    if ctx.voice_client and ctx.voice_client.is_playing():
+        ctx.voice_client.pause()
+        await ctx.send("Duraklatildi.")
+
+
+@bot.command(name="devam", aliases=["resume"], help="Duraklatilan sarkiyi devam ettir")
+async def resume(ctx: commands.Context):
+    if ctx.voice_client and ctx.voice_client.is_paused():
+        ctx.voice_client.resume()
+        await ctx.send("Devam ediliyor.")
+
+
+@bot.command(name="dur", aliases=["stop"], help="Calmayi durdur ve kuyrugu temizle")
+async def stop(ctx: commands.Context):
+    guild_id = ctx.guild.id
+    get_queue(guild_id).clear()
+    now_playing.pop(guild_id, None)
+    if ctx.voice_client:
+        ctx.voice_client.stop()
+    await ctx.send("Durduruldu ve kuyruk temizlendi.")
+
+
+@bot.command(name="git", aliases=["leave", "dc"], help="Ses kanalindan ayril")
+async def leave(ctx: commands.Context):
+    if ctx.voice_client:
+        guild_id = ctx.guild.id
+        get_queue(guild_id).clear()
+        now_playing.pop(guild_id, None)
+        await ctx.voice_client.disconnect()
+        await ctx.send("Gorusuruz!")
+    else:
+        await ctx.send("Zaten bir ses kanalinda degilim.")
+
+
+@bot.command(name="takip", help="Bir kanaldaki belirli kelimeyi takip et ve endpoint'e gonder")
+async def watch(ctx: commands.Context, channel: discord.TextChannel, keyword: str, endpoint: str):
+    global watcher_counter
+    guild_id = ctx.guild.id
+
+    if guild_id not in watchers:
+        watchers[guild_id] = []
+
+    watcher_counter += 1
+    watcher = {
+        "id": watcher_counter,
+        "channel_id": channel.id,
+        "keyword": keyword,
+        "endpoint": endpoint,
+    }
+    watchers[guild_id].append(watcher)
+    save_watchers()
+
+    await ctx.send(
+        f"Takip **#{watcher_counter}** eklendi!\n"
+        f"Kanal: {channel.mention}\n"
+        f"Kelime: `{keyword}`\n"
+        f"Endpoint: `{endpoint}`"
+    )
+
+
+@bot.command(name="takipler", aliases=["watchlist"], help="Aktif takipleri listele")
+async def list_watchers(ctx: commands.Context):
+    guild_watchers = watchers.get(ctx.guild.id, [])
+    if not guild_watchers:
+        return await ctx.send("Aktif takip yok.")
+
+    msg = "**Aktif Takipler:**\n"
+    for w in guild_watchers:
+        channel = bot.get_channel(w["channel_id"])
+        ch_name = channel.mention if channel else f"(silinmis kanal {w['channel_id']})"
+        msg += f"`#{w['id']}` | {ch_name} | Kelime: `{w['keyword']}` | Endpoint: `{w['endpoint']}`\n"
+
+    await ctx.send(msg)
+
+
+@bot.command(name="takipkaldir", aliases=["unwatch"], help="Takibi kaldır (ID ile)")
+async def remove_watcher(ctx: commands.Context, watcher_id: int):
+    guild_watchers = watchers.get(ctx.guild.id, [])
+    for i, w in enumerate(guild_watchers):
+        if w["id"] == watcher_id:
+            guild_watchers.pop(i)
+            save_watchers()
+            return await ctx.send(f"Takip **#{watcher_id}** kaldirildi.")
+
+    await ctx.send(f"Takip **#{watcher_id}** bulunamadi.")
+
+
+bot.run(os.getenv("DISCORD_TOKEN"))
