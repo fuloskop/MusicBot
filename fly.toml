@@ -6,6 +6,10 @@ primary_region = "fra"
 [processes]
   app = "python bot.py"
 
+[mounts]
+  source = "musicbot_data"
+  destination = "/data"
+
 [[vm]]
   size = "shared-cpu-1x"
   memory = "256mb"

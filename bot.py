@@ -32,7 +32,9 @@ now_playing: dict[int, str] = {}
 
 # Kanal takip sistemi
 # { guild_id: [ { "id": int, "channel_id": int, "keyword": str, "endpoint": str } ] }
-WATCHERS_FILE = "watchers.json"
+# /data volume'u varsa orayi kullan (Fly.io), yoksa mevcut dizin (lokal)
+DATA_DIR = "/data" if os.path.isdir("/data") else "."
+WATCHERS_FILE = os.path.join(DATA_DIR, "watchers.json")
 watchers: dict[int, list[dict]] = {}
 watcher_counter = 0
 
