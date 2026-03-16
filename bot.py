@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime, timezone
 import discord
 from discord.ext import commands
 from collections import deque
@@ -24,6 +25,59 @@ now_playing: dict[int, str] = {}
 WATCHERS_FILE = "watchers.json"
 watchers: dict[int, list[dict]] = {}
 watcher_counter = 0
+
+# Log sistemi - son 100 log tutulur
+watcher_logs: dict[int, deque] = {}
+MAX_LOGS = 100
+
+
+def get_logs(guild_id: int) -> deque:
+    if guild_id not in watcher_logs:
+        watcher_logs[guild_id] = deque(maxlen=MAX_LOGS)
+    return watcher_logs[guild_id]
+
+
+def add_log(guild_id: int, log_type: str, watcher_id: int, **kwargs):
+    """Log kaydı ekle ve konsola yaz."""
+    now = datetime.now(timezone.utc)
+    entry = {
+        "time": now.isoformat(),
+        "type": log_type,
+        "watcher_id": watcher_id,
+        **kwargs,
+    }
+    get_logs(guild_id).append(entry)
+
+    # Fly.io monitoring icin konsol logu
+    time_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    if log_type == "match":
+        print(
+            f"[{time_str}] [MATCH] Takip #{watcher_id} | "
+            f"Kanal: #{kwargs.get('channel', '?')} | "
+            f"Yazan: {kwargs.get('author', '?')} | "
+            f"Eslesen: {kwargs.get('matched', [])} | "
+            f"Mesaj: {kwargs.get('content', '')[:80]}"
+        )
+    elif log_type == "sent":
+        print(
+            f"[{time_str}] [SENT] Takip #{watcher_id} | "
+            f"Endpoint: {kwargs.get('endpoint', '?')} | "
+            f"Status: {kwargs.get('status', '?')}"
+        )
+    elif log_type == "error":
+        print(
+            f"[{time_str}] [ERROR] Takip #{watcher_id} | "
+            f"Endpoint: {kwargs.get('endpoint', '?')} | "
+            f"Hata: {kwargs.get('error', '?')}"
+        )
+    elif log_type == "added":
+        print(
+            f"[{time_str}] [ADDED] Takip #{watcher_id} | "
+            f"Kanal: #{kwargs.get('channel', '?')} | "
+            f"Kelime: {kwargs.get('keyword', '?')}"
+        )
+    elif log_type == "removed":
+        print(f"[{time_str}] [REMOVED] Takip #{watcher_id}")
 
 
 def load_watchers():
@@ -140,6 +194,15 @@ async def on_message(message: discord.Message):
         if not matched:
             continue
 
+        # Log: eslesti
+        add_log(
+            message.guild.id, "match", watcher["id"],
+            channel=message.channel.name,
+            author=str(message.author),
+            matched=matched,
+            content=message.content,
+        )
+
         # Eslesen mesaji endpoint'e gonder
         payload = {
             "guild_id": message.guild.id,
@@ -162,12 +225,17 @@ async def on_message(message: discord.Message):
                     json=payload,
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
-                    print(
-                        f"[Takip #{watcher['id']}] Mesaj gonderildi -> "
-                        f"{watcher['endpoint']} (status: {resp.status})"
+                    add_log(
+                        message.guild.id, "sent", watcher["id"],
+                        endpoint=watcher["endpoint"],
+                        status=resp.status,
                     )
         except Exception as e:
-            print(f"[Takip #{watcher['id']}] Hata: {e}")
+            add_log(
+                message.guild.id, "error", watcher["id"],
+                endpoint=watcher["endpoint"],
+                error=str(e),
+            )
 
 
 @bot.command(name="help", aliases=["yardim", "komutlar"])
@@ -209,7 +277,8 @@ async def help_command(ctx: commands.Context):
         name="Genel",
         value=(
             "`!help` — Bu mesaji goster (alias: `!yardim`, `!komutlar`)\n"
-            "`!config` — Sunucunun mevcut ayarlarini goster"
+            "`!config` — Sunucunun mevcut ayarlarini goster\n"
+            "`!loglar [adet]` — Son takip loglarini goster (alias: `!logs`)"
         ),
         inline=False,
     )
@@ -408,6 +477,7 @@ async def watch(ctx: commands.Context, channel: discord.TextChannel, keyword: st
     }
     watchers[guild_id].append(watcher)
     save_watchers()
+    add_log(guild_id, "added", watcher_counter, channel=channel.name, keyword=keyword)
 
     await ctx.send(
         f"Takip **#{watcher_counter}** eklendi!\n"
@@ -439,9 +509,71 @@ async def remove_watcher(ctx: commands.Context, watcher_id: int):
         if w["id"] == watcher_id:
             guild_watchers.pop(i)
             save_watchers()
+            add_log(ctx.guild.id, "removed", watcher_id)
             return await ctx.send(f"Takip **#{watcher_id}** kaldirildi.")
 
     await ctx.send(f"Takip **#{watcher_id}** bulunamadi.")
+
+
+@bot.command(name="loglar", aliases=["logs"], help="Son takip loglarini goster")
+async def show_logs(ctx: commands.Context, adet: int = 10):
+    adet = min(adet, 25)
+    logs = get_logs(ctx.guild.id)
+
+    if not logs:
+        return await ctx.send("Henuz log kaydı yok.")
+
+    recent = list(logs)[-adet:]
+    recent.reverse()
+
+    embed = discord.Embed(
+        title=f"Takip Loglari (son {len(recent)})",
+        color=0xE67E22,
+    )
+
+    type_icons = {
+        "match": "🔍",
+        "sent": "✅",
+        "error": "❌",
+        "added": "➕",
+        "removed": "➖",
+    }
+
+    lines = []
+    for log in recent:
+        icon = type_icons.get(log["type"], "📋")
+        time_str = log["time"][11:19]  # HH:MM:SS
+        wid = log["watcher_id"]
+
+        if log["type"] == "match":
+            line = (
+                f"{icon} `{time_str}` **#{wid}** Eslesti\n"
+                f"  Kanal: #{log.get('channel', '?')} | Yazan: {log.get('author', '?')}\n"
+                f"  Kelimeler: `{', '.join(log.get('matched', []))}`\n"
+                f"  Mesaj: `{log.get('content', '')[:60]}`"
+            )
+        elif log["type"] == "sent":
+            line = (
+                f"{icon} `{time_str}` **#{wid}** Gonderildi\n"
+                f"  Status: `{log.get('status', '?')}` | Endpoint: `{log.get('endpoint', '?')[:40]}`"
+            )
+        elif log["type"] == "error":
+            line = (
+                f"{icon} `{time_str}` **#{wid}** Hata\n"
+                f"  `{log.get('error', '?')[:60]}`"
+            )
+        elif log["type"] == "added":
+            line = f"{icon} `{time_str}` **#{wid}** Takip eklendi — #{log.get('channel', '?')} | `{log.get('keyword', '?')}`"
+        elif log["type"] == "removed":
+            line = f"{icon} `{time_str}` **#{wid}** Takip kaldirildi"
+        else:
+            line = f"📋 `{time_str}` **#{wid}** {log['type']}"
+
+        lines.append(line)
+
+    embed.description = "\n\n".join(lines)
+    embed.set_footer(text="Fly.io monitoring: fly.io/apps/musicbot-rfsieg/monitoring")
+    await ctx.send(embed=embed)
 
 
 bot.run(os.getenv("DISCORD_TOKEN"))
