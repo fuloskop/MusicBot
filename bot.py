@@ -13,7 +13,7 @@ load_dotenv()
 intents = discord.Intents.default()
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # Her sunucu (guild) için ayrı kuyruk
 queues: dict[int, deque] = {}
@@ -163,6 +163,114 @@ async def on_message(message: discord.Message):
                     )
         except Exception as e:
             print(f"[Takip #{watcher['id']}] Hata: {e}")
+
+
+@bot.command(name="help", aliases=["yardim", "komutlar"])
+async def help_command(ctx: commands.Context):
+    embed = discord.Embed(
+        title="MusicBot - Komutlar",
+        description="Asagida kullanabilcegin tum komutlar listelenmistir.",
+        color=0x2ECC71,
+    )
+
+    embed.add_field(
+        name="Muzik Komutlari",
+        value=(
+            "`!gel` — Botu ses kanalina cagir\n"
+            "`!cal <link/arama>` — Sarki cal (alias: `!p`, `!play`)\n"
+            "`!liste` — Kuyruktaki sarkilari goster (alias: `!q`, `!queue`)\n"
+            "`!atla` — Sarkiyi atla (alias: `!s`, `!skip`)\n"
+            "`!duraklat` — Sarkiyi duraklat (alias: `!pause`)\n"
+            "`!devam` — Duraklatilmis sarkiyi devam ettir (alias: `!resume`)\n"
+            "`!dur` — Calmayi durdur ve kuyrugu temizle (alias: `!stop`)\n"
+            "`!git` — Ses kanalindan ayril (alias: `!leave`, `!dc`)"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Kanal Takip Komutlari",
+        value=(
+            "`!takip <#kanal> <kelime> <endpoint>` — Kanaldaki kelimeyi takip et\n"
+            "`!takipler` — Aktif takipleri listele (alias: `!watchlist`)\n"
+            "`!takipkaldir <id>` — Takibi kaldir (alias: `!unwatch`)"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Genel",
+        value=(
+            "`!help` — Bu mesaji goster (alias: `!yardim`, `!komutlar`)\n"
+            "`!config` — Sunucunun mevcut ayarlarini goster"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Ornek Kullanim",
+        value=(
+            "```\n"
+            "!cal https://youtube.com/watch?v=...\n"
+            "!cal never gonna give you up\n"
+            "!takip #genel indirim https://api.example.com/hook\n"
+            "```"
+        ),
+        inline=False,
+    )
+
+    embed.set_footer(text="MusicBot | !help ile bu mesaji tekrar gorebilirsin")
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="config", aliases=["ayarlar", "durum"])
+async def config(ctx: commands.Context):
+    guild_id = ctx.guild.id
+    embed = discord.Embed(
+        title="Sunucu Konfigurasyonu",
+        description=f"**{ctx.guild.name}** icin mevcut ayarlar",
+        color=0x3498DB,
+    )
+
+    # Muzik durumu
+    queue = get_queue(guild_id)
+    if guild_id in now_playing:
+        music_status = f"Caliniyor: **{now_playing[guild_id]}**\nKuyrukta **{len(queue)}** sarki var"
+    elif len(queue) > 0:
+        music_status = f"Duraklatilmis — Kuyrukta **{len(queue)}** sarki var"
+    else:
+        music_status = "Su an bir sey calmiyor"
+
+    vc_status = "Bagli" if ctx.voice_client else "Bagli degil"
+    embed.add_field(
+        name="Muzik Durumu",
+        value=f"{music_status}\nSes kanali: **{vc_status}**",
+        inline=False,
+    )
+
+    # Takip durumu
+    guild_watchers = watchers.get(guild_id, [])
+    if guild_watchers:
+        watcher_lines = []
+        for w in guild_watchers:
+            channel = bot.get_channel(w["channel_id"])
+            ch_name = channel.mention if channel else f"(silinmis kanal)"
+            watcher_lines.append(
+                f"`#{w['id']}` {ch_name} — Kelime: `{w['keyword']}`\n"
+                f"  Endpoint: `{w['endpoint']}`"
+            )
+        watcher_text = "\n".join(watcher_lines)
+    else:
+        watcher_text = "Aktif takip yok\n`!takip #kanal kelime endpoint` ile ekle"
+
+    embed.add_field(
+        name=f"Kanal Takipleri ({len(guild_watchers)} aktif)",
+        value=watcher_text,
+        inline=False,
+    )
+
+    embed.set_footer(text="MusicBot | Ayarlari degistirmek icin !help yaz")
+    await ctx.send(embed=embed)
 
 
 @bot.command(name="gel", help="Botu ses kanalina cagir")
