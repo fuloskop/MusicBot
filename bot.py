@@ -203,6 +203,18 @@ async def on_message(message: discord.Message):
         for field in embed.fields:
             full_content += " " + field.name + " " + field.value
 
+    # Debug: takip edilen kanallardaki tum mesajlari logla
+    watched_channel_ids = {w["channel_id"] for w in guild_watchers}
+    if message.channel.id in watched_channel_ids:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        print(
+            f"[{now}] [DEBUG] Kanal: #{message.channel.name} | "
+            f"Yazan: {message.author} (bot={message.author.bot}, webhook={message.webhook_id}) | "
+            f"Content: '{message.content[:100]}' | "
+            f"Embeds: {len(message.embeds)} | "
+            f"FullContent: '{full_content[:100]}'"
+        )
+
     if not full_content.strip():
         return
 
