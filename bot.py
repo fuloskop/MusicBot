@@ -1,5 +1,6 @@
 import asyncio
 import json
+import unicodedata
 from datetime import datetime, timezone
 import discord
 from discord.ext import commands
@@ -8,6 +9,15 @@ from dotenv import load_dotenv
 import os
 import yt_dlp
 import aiohttp
+
+
+def normalize_turkish(text: str) -> str:
+    """Turkce karakterleri normalize et ve kucuk harfe cevir."""
+    text = unicodedata.normalize("NFC", text)
+    # Turkce buyuk harfleri kucuge cevir
+    tr_map = str.maketrans("İIŞĞÜÖÇ", "iısğüöç")
+    text = text.translate(tr_map)
+    return text.lower()
 
 load_dotenv()
 
@@ -167,14 +177,15 @@ async def on_ready():
 
 @bot.event
 async def on_message(message: discord.Message):
-    # Bot kendi mesajlarini yoksay
-    if message.author.bot:
+    # Kendi mesajlarimizi yoksay (sadece bu bot)
+    if message.author.id == bot.user.id:
         return
 
-    # Komutlari isle
-    await bot.process_commands(message)
+    # Komutlari isle (sadece insan mesajlari icin)
+    if not message.author.bot:
+        await bot.process_commands(message)
 
-    # Takip kontrolu
+    # Takip kontrolu (bot mesajlari dahil)
     if not message.guild:
         return
 
@@ -182,14 +193,27 @@ async def on_message(message: discord.Message):
     if not guild_watchers:
         return
 
-    content_lower = message.content.lower()
+    # Embed icerigini de kontrol et
+    full_content = message.content
+    for embed in message.embeds:
+        if embed.description:
+            full_content += " " + embed.description
+        if embed.title:
+            full_content += " " + embed.title
+        for field in embed.fields:
+            full_content += " " + field.name + " " + field.value
+
+    if not full_content.strip():
+        return
+
+    content_lower = normalize_turkish(full_content)
 
     for watcher in guild_watchers:
         if watcher["channel_id"] != message.channel.id:
             continue
 
         # Virgülle ayrılmış kelimelerden herhangi biri geçiyorsa eşleş
-        keywords = [k.strip().lower() for k in watcher["keyword"].split(",")]
+        keywords = [normalize_turkish(k.strip()) for k in watcher["keyword"].split(",")]
         matched = [k for k in keywords if k and k in content_lower]
         if not matched:
             continue
