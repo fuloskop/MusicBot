@@ -1,0 +1,11 @@
+app = "musicbot-rfsieg"
+primary_region = "ams"
+
+[build]
+
+[processes]
+  app = "python bot.py"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
