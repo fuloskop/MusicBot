@@ -106,6 +106,8 @@ def save_watchers():
     with open(WATCHERS_FILE, "w") as f:
         json.dump({"watchers": watchers, "counter": watcher_counter}, f, indent=2)
 
+COOKIES_FILE = os.path.join(DATA_DIR, "cookies.txt")
+
 YDL_OPTIONS = {
     "format": "bestaudio/best",
     "noplaylist": False,
@@ -114,6 +116,9 @@ YDL_OPTIONS = {
     "default_search": "ytsearch",
     "extract_flat": False,
 }
+
+if os.path.exists(COOKIES_FILE):
+    YDL_OPTIONS["cookiefile"] = COOKIES_FILE
 
 FFMPEG_OPTIONS = {
     "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
