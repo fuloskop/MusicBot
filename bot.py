@@ -115,6 +115,10 @@ YDL_OPTIONS = {
     "no_warnings": True,
     "default_search": "ytsearch",
     "extract_flat": False,
+    "extractor_args": {"youtube": {"player_client": ["web_music", "android_music"]}},
+    "http_headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    },
 }
 
 if os.path.exists(COOKIES_FILE):
